@@ -7,13 +7,15 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 
 builder.Services.AddControllers(
-    config => { 
+    //config => { 
         
-        config.InputFormatters.Insert(0, GetJsonPatchInputFormatter()); 
+    //    //config.InputFormatters.Insert(0, GetJsonPatchInputFormatter());   
     
-    
-    });
+    //}
+    );
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+
+//builder.Services.ConfigureOptions<PatchHanlde.JsonPatch.PatchJsonInputFormatterConfiguration>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -36,6 +38,6 @@ app.Run();
 
 
 
-NewtonsoftJsonPatchInputFormatter GetJsonPatchInputFormatter() => 
-    new ServiceCollection().AddLogging().AddMvc().AddNewtonsoftJson().Services.BuildServiceProvider()
-    .GetRequiredService<IOptions<MvcOptions>>().Value.InputFormatters.OfType<NewtonsoftJsonPatchInputFormatter>().First();
+//NewtonsoftJsonPatchInputFormatter GetJsonPatchInputFormatter() => 
+//    new ServiceCollection().AddLogging().AddMvc().AddNewtonsoftJson().Services.BuildServiceProvider()
+//    .GetRequiredService<IOptions<MvcOptions>>().Value.InputFormatters.OfType<NewtonsoftJsonPatchInputFormatter>().First();

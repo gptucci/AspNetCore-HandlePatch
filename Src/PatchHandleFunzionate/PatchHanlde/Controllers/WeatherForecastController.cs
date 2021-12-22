@@ -1,5 +1,7 @@
-using Microsoft.AspNetCore.JsonPatch;
+//using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
+
+using PatchHanlde.JsonPatch;
 
 namespace PatchHanlde.Controllers
 {
@@ -33,11 +35,12 @@ namespace PatchHanlde.Controllers
 
 
         [HttpPatch("{id:int}")]
-        public IActionResult PartiallyUpdateWeatherForecest(int id, [FromBody] JsonPatchDocument<WeatherForecast> patchDoc)
+        public IActionResult PartiallyUpdateWeatherForecest(int id, [FromBody] Operation[] operations)
         {
-            if (patchDoc is null)
-                return BadRequest("patchDoc object sent from client is null.");
+            //if (patchDoc is null)
+            //    return BadRequest("patchDoc object sent from client is null.");
 
+            // simulate get from db with ID == id
             WeatherForecast weatherForecast = new WeatherForecast()
             {
                 Date=DateTime.Now,
@@ -45,7 +48,12 @@ namespace PatchHanlde.Controllers
                 Summary="Summary"
             };
 
-            patchDoc.ApplyTo(weatherForecast);
+            foreach (var operation in operations)
+            {
+                operation.Patch(weatherForecast);
+            }
+
+            //patchDoc.ApplyTo(weatherForecast);
             
             return NoContent();
         }
