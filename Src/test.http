@@ -1,0 +1,11 @@
+PATCH https://localhost:7201/WeatherForecast/1
+Content-type: application/json-patch+json
+
+
+   [
+        {
+            "op": "replace",
+            "path": "/TemperatureC",
+            "value": "18"
+        }
+    ]
