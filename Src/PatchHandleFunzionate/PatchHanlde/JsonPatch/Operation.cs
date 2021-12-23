@@ -1,13 +1,14 @@
 ﻿using System.Linq.Expressions;
+using System.Reflection;
 using System.Text.Json;
 
 namespace PatchHanlde.JsonPatch
 {
-    public class Operation
+    public record Operation(string Op, string Path, JsonElement Value)
     {
-        public string Op { get; set; }
-        public string Path { get; set; }
-        public JsonElement Value { get; set; }
+        //public string Op { get; set; }
+        //public string Path { get; set; }
+        //public JsonElement Value { get; set; }
 
         private static Dictionary<string, object?> _actions = new();
 
@@ -40,7 +41,10 @@ namespace PatchHanlde.JsonPatch
             var key = $"{typeof(T).FullName}.{Path}";
 
             if (_actions.TryGetValue(key, out object? action))
+            {
+                if (action == null) throw new InvalidOperationException($"The key {key} contains a null reference");
                 return (Action<T, Operation>)action;
+            }
 
             var expression = CreateReplaceExpression<T>();
             var del = expression.Compile();
@@ -48,106 +52,142 @@ namespace PatchHanlde.JsonPatch
             return del;
         }
 
+        /// <summary>
+        /// This method generates a lambda
+        /// </summary>
+        /// <typeparam name="T">Type of the model</typeparam>
+        /// <returns>The Expression representing the lambda</returns>
         private Expression<Action<T, Operation>> CreateReplaceExpression<T>()
         {
+            // first incoming parameter of the lambda
             ParameterExpression input = Expression.Parameter(typeof(T), "input");
-            var propertyName = GetPropertyName();
-            var propertyInfo = typeof(T).GetProperties()
-                .FirstOrDefault(p => string.Compare(p.Name, propertyName, StringComparison.InvariantCultureIgnoreCase) == 0);
-            if (propertyInfo == null)
-            {
-                throw new InvalidOperationException($"The property {Path} does not exist in {typeof(T).Name}");
-            }
 
-            if (!propertyInfo.CanWrite)
-            {
-                throw new InvalidOperationException($"The property {Path} in {typeof(T).Name} does not have a set accessor");
-            }
-
-            var accessProperty = Expression.MakeMemberAccess(input, propertyInfo);
+            // second incoming parameter of the lambda
+            // This is needed to access Path and Value
             ParameterExpression operation = Expression.Parameter(typeof(Operation));
-            var getValueMethod = typeof(Operation).GetMethod(nameof(GetValue),
-                System.Reflection.BindingFlags.Instance |
-                System.Reflection.BindingFlags.NonPublic);
 
-            var value = Expression.Call(operation, getValueMethod, Expression.Constant(propertyInfo.PropertyType));
+            // Build the complete access path from the Path syntax
+            var accessProperty = BuildFromPath(input);
 
-            var propType = Expression.Constant(propertyInfo.PropertyType);
+            // The Expression representing "operation.Value"
             var valueProp = Expression.Property(operation, "Value");
-            var getValue = GetGetValueExpression(valueProp, propertyInfo.PropertyType);
 
-            //var assignment = Expression.Assign(accessProperty, 
-            //    Expression.Convert(
-            //        Expression.Constant(GetValue(propertyInfo.PropertyType, (JsonElement)Value)), propertyInfo.PropertyType));
+            // Build the Expression using the most appropriate GetXXX method on JsonElement
+            // The method is choosen from the type of the property pointed from the Path
+            var getValue = GetGetValueExpression(valueProp, accessProperty.Type);
 
-            //var assignment = Expression.Assign(accessProperty, 
-            //    Expression.Convert(
-            //        value, propertyInfo.PropertyType));
-
+            // Assign the Value retrieved from the JsonElement to the property
             var assignment = Expression.Assign(accessProperty, getValue);
 
+            // Build the final lambda
             var lambda = Expression.Lambda<Action<T, Operation>>(assignment, input, operation);
             return lambda;
         }
 
+        /// <summary>
+        /// Build the Expression using the most appropriate GetXXX method on JsonElement
+        /// </summary>
+        /// <param name="jsonElement">The Expression representing the JsonElement</param>
+        /// <param name="type">The type expected from the property pointed from Path</param>
+        /// <returns>The Expression returning the value</returns>
+        /// <exception cref="NotSupportedException"></exception>
+        /// <exception cref="Exception"></exception>
         private Expression GetGetValueExpression(Expression jsonElement, Type type)
         {
             Type jet = typeof(JsonElement);
-            if (type == typeof(Guid)) return Expression.Call(jsonElement, jet.GetMethod("GetGuid"));
-            if (type == typeof(string)) return Expression.Call(jsonElement, jet.GetMethod("GetString"));
-            if (type == typeof(bool)) return Expression.Call(jsonElement, jet.GetMethod("GetBoolean"));
-            if (type == typeof(byte)) return Expression.Call(jsonElement, jet.GetMethod("GetByte"));
-            if (type == typeof(sbyte)) return Expression.Call(jsonElement, jet.GetMethod("GetSByte"));
-            if (type == typeof(DateTime)) return Expression.Call(jsonElement, jet.GetMethod("GetDateTime"));
-            if (type == typeof(DateTimeOffset)) return Expression.Call(jsonElement, jet.GetMethod("GetDateTimeOffset"));
-            if (type == typeof(Decimal)) return Expression.Call(jsonElement, jet.GetMethod("GetDecimal"));
-            if (type == typeof(Double)) return Expression.Call(jsonElement, jet.GetMethod("GetDouble"));
-            if (type == typeof(Single)) return Expression.Call(jsonElement, jet.GetMethod("GetSingle"));
-            if (type == typeof(Int16)) return Expression.Call(jsonElement, jet.GetMethod("GetInt16"));
-            if (type == typeof(Int32)) return Expression.Call(jsonElement, jet.GetMethod("GetInt32"));
-            if (type == typeof(Int64)) return Expression.Call(jsonElement, jet.GetMethod("GetInt64"));
-            if (type == typeof(UInt16)) return Expression.Call(jsonElement, jet.GetMethod("GetUInt16"));
-            if (type == typeof(UInt32)) return Expression.Call(jsonElement, jet.GetMethod("GetUInt32"));
-            if (type == typeof(UInt64)) return Expression.Call(jsonElement, jet.GetMethod("GetUInt64"));
+            if (type == typeof(Guid)) return BuildCall(jsonElement, jet, "GetGuid");
+            if (type == typeof(string)) return BuildCall(jsonElement, jet, "GetString");
+            if (type == typeof(bool)) return BuildCall(jsonElement, jet, "GetBoolean");
+            if (type == typeof(byte)) return BuildCall(jsonElement, jet, "GetByte");
+            if (type == typeof(sbyte)) return BuildCall(jsonElement, jet, "GetSByte");
+            if (type == typeof(DateTime)) return BuildCall(jsonElement, jet, "GetDateTime");
+            if (type == typeof(DateTimeOffset)) return BuildCall(jsonElement, jet, "GetDateTimeOffset");
+            if (type == typeof(Decimal)) return BuildCall(jsonElement, jet, "GetDecimal");
+            if (type == typeof(Double)) return BuildCall(jsonElement, jet, "GetDouble");
+            if (type == typeof(Single)) return BuildCall(jsonElement, jet, "GetSingle");
+            if (type == typeof(Int16)) return BuildCall(jsonElement, jet, "GetInt16");
+            if (type == typeof(Int32)) return BuildCall(jsonElement, jet, "GetInt32");
+            if (type == typeof(Int64)) return BuildCall(jsonElement, jet, "GetInt64");
+            if (type == typeof(UInt16)) return BuildCall(jsonElement, jet, "GetUInt16");
+            if (type == typeof(UInt32)) return BuildCall(jsonElement, jet, "GetUInt32");
+            if (type == typeof(UInt64)) return BuildCall(jsonElement, jet, "GetUInt64");
 
             throw new NotSupportedException($"The type {type.Name} is not supported");
-        }
 
-        private object? GetValue(Type propertyType)
-        {
-            var value = (JsonElement)Value;
-            object? res = propertyType.Name switch
+            static Expression BuildCall(Expression instance, Type type, string methodName)
             {
-                "String" => value.GetString(),
-                "Int32" => value.GetInt32(),
-                _ => throw new InvalidOperationException($"Unsupported type: {propertyType.Name}"),
-            };
-
-            return res;
+                var methodInfo = type.GetMethod(methodName);
+                if (methodInfo == null) throw new Exception($"Cannot find {methodName} in type {type.Name}");
+                return Expression.Call(instance, methodInfo);
+            }
         }
 
-        //private void PatchPerson(Person input)
-        //{
-        //    input.Name = null;// Value
-        //}
-
-        //private class Person
-        //{
-        //    public int Id { get; set; }
-        //    public string Name { get; set; }
-        //}
-    
-
-        private string GetPropertyName()
+        /// <summary>
+        /// Build the complete access path from the Path syntax
+        /// Path can be complex (multiple '/' specifying numeric indexes as well)
+        /// </summary>
+        /// <param name="root">The root Expression to start from</param>
+        /// <returns>The accessor as an Expression</returns>
+        /// <exception cref="InvalidOperationException"></exception>
+        private Expression BuildFromPath(Expression root)
         {
-            if (Path[0] != '/')
-                throw new InvalidOperationException($"Path must begin with '/'");
-            if (Path.IndexOf('/', 1) != -1)
-                throw new InvalidOperationException($"Only single-level path are supported: {Path}");
+            var segments = this.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            Expression temp = root;
+            PropertyInfo? lastProperty = null;
+            bool lastCanWrite = false;
+            foreach (var segment in segments)
+            {
+                if (char.IsNumber(segment[0]))
+                {
+                    if (!int.TryParse(segment, out int index))
+                    {
+                        throw new InvalidOperationException($"The segment {segment} in the path {Path} is not valid");
+                    }
 
-            return Path.Substring(1);
+                    if (temp.Type.IsArray)
+                    {
+                        // It is an array
+                        temp = Expression.ArrayAccess(temp, Expression.Constant(index));
+                        lastCanWrite = true;
+                    }
+                    else if (typeof(System.Collections.ICollection).IsAssignableFrom(temp.Type))
+                    {
+                        // it is a collection accessible with the indexer (implements ICollection)
+                        var itemProperty = temp.Type.GetProperty("Item", new Type[] { typeof(int) });
+                        if (itemProperty == null)
+                        {
+                            throw new InvalidOperationException($"Cannot find a valid indexer in property {lastProperty?.Name}");
+                        }
+
+                        lastCanWrite = itemProperty.CanWrite;
+                        temp = Expression.Property(temp, itemProperty, Expression.Constant(index));
+                    }
+
+                }
+                else
+                {
+                    // it is a standard property
+                    var currentType = temp.Type;
+                    lastProperty = currentType.GetProperties()
+                        .FirstOrDefault(p => string.Compare(p.Name, segment, StringComparison.InvariantCultureIgnoreCase) == 0);
+                    if (lastProperty == null)
+                    {
+                        throw new InvalidOperationException($"The path {Path} does not exist in the Type {root.Type.Name}");
+                    }
+
+                    lastCanWrite = lastProperty.CanWrite;
+                    temp = Expression.MakeMemberAccess(temp, lastProperty);
+                }
+
+            }
+
+            if (!lastCanWrite)
+            {
+                throw new InvalidOperationException($"The property pointed from {Path} cannot be written");
+            }
+
+            return temp;
         }
-
 
     }
 }

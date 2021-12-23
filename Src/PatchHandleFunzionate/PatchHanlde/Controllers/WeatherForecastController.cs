@@ -43,10 +43,27 @@ namespace PatchHanlde.Controllers
             // simulate get from db with ID == id
             WeatherForecast weatherForecast = new WeatherForecast()
             {
-                Date=DateTime.Now,
-                TemperatureC=10,
-                Summary="Summary"
+                Date = DateTime.Now,
+                TemperatureC = 10,
+                Summary = "Summary",
+                Numbers = new int[] { 1, 2, },
             };
+
+            weatherForecast.Linked.Add(new WeatherForecast
+            {
+                Date = DateTime.Now,
+                TemperatureC = 11,
+                Summary = "Summary2",
+                Numbers = new int[] { 3, 4, },
+            });
+
+            weatherForecast.Linked.Add(new WeatherForecast
+            {
+                Date = DateTime.Now,
+                TemperatureC = 12,
+                Summary = "Summary3",
+                Numbers = new int[] { 5, 6, },
+            });
 
             foreach (var operation in operations)
             {
@@ -54,7 +71,7 @@ namespace PatchHanlde.Controllers
             }
 
             //patchDoc.ApplyTo(weatherForecast);
-            
+
             return NoContent();
         }
     }

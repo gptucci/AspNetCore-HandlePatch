@@ -1,11 +1,39 @@
+
+
+### Root
 PATCH https://localhost:7201/WeatherForecast/1
 Content-type: application/json-patch+json
 
+[
+    {
+        "op": "replace",
+        "path": "/TemperatureC",
+        "value": 18
+    }
+]
 
-   [
-        {
-            "op": "replace",
-            "path": "/TemperatureC",
-            "value": "18"
-        }
-    ]
+### Collection
+PATCH https://localhost:7201/WeatherForecast/1
+Content-type: application/json-patch+json
+
+[
+    {
+        "op": "replace",
+        "path": "/Linked/0/TemperatureC",
+        "value": 18
+    }
+]
+
+
+
+### Array
+PATCH https://localhost:7201/WeatherForecast/1
+Content-type: application/json-patch+json
+
+[
+    {
+        "op": "replace",
+        "path": "/Linked/0/Numbers/0",
+        "value": 18
+    }
+]
