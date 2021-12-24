@@ -6,10 +6,6 @@ namespace PatchHanlde.JsonPatch
 {
     public record Operation(string Op, string Path, JsonElement Value = default, string From = "")
     {
-        //public string Op { get; set; }
-        //public string Path { get; set; }
-        //public JsonElement Value { get; set; }
-
         private static Dictionary<string, object?> _actions = new();
         private Func<Operation, Type, object> _onCustomConversion;
         private bool _alwaysUseCustomConversion;
@@ -30,7 +26,7 @@ namespace PatchHanlde.JsonPatch
         private Action<T, Operation> CreateDelegate<T>()
         {
             // modified so that the cache is also tied to the path
-            var key = $"{typeof(T).FullName}.{Path}";
+            var key = $"{typeof(T).FullName}.{Op}.{Path}";
 
             if (_actions.TryGetValue(key, out object? action))
             {
@@ -175,9 +171,17 @@ namespace PatchHanlde.JsonPatch
             throw new NotSupportedException($"The operation is not supported on flags {pathFlags}");
         }
 
+        // TODO
         private Expression CreateOperandsForCopy(Expression input, Expression operation)
         {
-            throw new NotSupportedException();
+            // Build the complete access path from the Path syntax
+            var (source, fromPathFlags) = BuildFromPath(input, From);
+
+            // Build the complete access path from the Path syntax
+            var (target, targetPathFlags) = BuildFromPath(input, Path);
+
+
+            throw new NotSupportedException($"The operation is not supported on flags {targetPathFlags}");
         }
 
         private Expression CreateOperandsForMove(Expression input, Expression operation)
