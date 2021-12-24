@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Formatters;
 using Microsoft.Extensions.Options;
+using PatchHanlde;
+using PatchHanlde.Converter;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,12 +14,17 @@ builder.Services.AddControllers(
     //    //config.InputFormatters.Insert(0, GetJsonPatchInputFormatter());   
     
     //}
-    );
+    ).AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new DateOnlyJsonConverter());
+    }); ;
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 
 //builder.Services.ConfigureOptions<PatchHanlde.JsonPatch.PatchJsonInputFormatterConfiguration>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddScoped<IDataSource, DataSource>();
 
 var app = builder.Build();
 
