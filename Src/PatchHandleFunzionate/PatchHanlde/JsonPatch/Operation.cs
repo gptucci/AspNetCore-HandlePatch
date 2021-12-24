@@ -10,7 +10,6 @@ namespace PatchHanlde.JsonPatch
         //public string Path { get; set; }
         //public JsonElement Value { get; set; }
 
-        private OperationType _operationType;
         private static Dictionary<string, object?> _actions = new();
         private Func<Operation, Type, object> _onCustomConversion;
         private bool _alwaysUseCustomConversion;
@@ -19,30 +18,13 @@ namespace PatchHanlde.JsonPatch
             bool useAlways = false)
         {
             _onCustomConversion = onCustomConversion;
-            _alwaysUseCustomConversion= useAlways;
+            _alwaysUseCustomConversion = useAlways;
         }
 
         public void Patch<T>(T model)
         {
-            if (!Enum.TryParse(Op, true, out _operationType))
-                return;
-
-            switch (_operationType)
-            {
-                case OperationType.Replace:
-                    var del = CreateDelegate<T>();
-                    del(model, this);
-                    break;
-
-                case OperationType.Add:
-                case OperationType.Test:
-                case OperationType.Invalid:
-                case OperationType.Copy:
-                case OperationType.Move:
-                case OperationType.Remove:
-                default:
-                    break;
-            }
+            var del = CreateDelegate<T>();
+            del(model, this);
         }
 
         private Action<T, Operation> CreateDelegate<T>()
@@ -56,7 +38,7 @@ namespace PatchHanlde.JsonPatch
                 return (Action<T, Operation>)action;
             }
 
-            var expression = CreateReplaceExpression<T>();
+            var expression = CreateExpression<T>();
             var del = expression.Compile();
             _actions[key] = del;
             return del;
@@ -67,8 +49,11 @@ namespace PatchHanlde.JsonPatch
         /// </summary>
         /// <typeparam name="T">Type of the model</typeparam>
         /// <returns>The Expression representing the lambda</returns>
-        private Expression<Action<T, Operation>> CreateReplaceExpression<T>()
+        private Expression<Action<T, Operation>> CreateExpression<T>()
         {
+            if (!Enum.TryParse(Op, true, out OperationType operationType))
+                throw new InvalidOperationException($"Invalid operation type {Op}");
+
             // first incoming parameter of the lambda
             ParameterExpression input = Expression.Parameter(typeof(T), "input");
 
@@ -76,26 +61,133 @@ namespace PatchHanlde.JsonPatch
             // This is needed to access Path and Value
             ParameterExpression operation = Expression.Parameter(typeof(Operation));
 
+            var body = operationType switch
+            {
+                OperationType.Replace => CreateOperandsForReplace(input, operation),
+                OperationType.Add => CreateOperandsForAdd(input, operation),
+                OperationType.Remove => CreateOperandsForRemove(input, operation),
+                OperationType.Copy => CreateOperandsForCopy(input, operation),
+                OperationType.Move => CreateOperandsForMove(input, operation),
+                OperationType.Test => CreateOperandsForTest(input, operation),
+
+                _ => throw new Exception($"Unsupported operation {Op}"),
+            };
+
+            // Build the final lambda
+            var lambda = Expression.Lambda<Action<T, Operation>>(body, input, operation);
+            return lambda;
+        }
+
+        // feature complete
+        private Expression CreateOperandsForReplace(Expression input, Expression operation)
+        {
             // Build the complete access path from the Path syntax
-            var (accessProperty, pathFlags) = BuildFromPath(input);
+            var (target, pathFlags) = BuildFromPath(input, Path);
             if (!pathFlags.HasFlag(PathFlags.CanWrite))
             {
                 throw new InvalidOperationException($"The property pointed from {Path} cannot be written");
             }
 
-            // The Expression representing "operation.Value"
+            // The Expression representing "operation.Value" (it is a System.Text.Json.JsonElement)
             var valueProp = Expression.Property(operation, "Value");
 
             // Build the Expression using the most appropriate GetXXX method on JsonElement
             // The method is choosen from the type of the property pointed from the Path
-            var getValue = GetGetValueExpression(valueProp, accessProperty.Type);
+            var getValue = GetGetValueExpression(valueProp, target.Type);
 
             // Assign the Value retrieved from the JsonElement to the property
-            var assignment = Expression.Assign(accessProperty, getValue);
+            var assignment = Expression.Assign(target, getValue);
+            return assignment;
+        }
 
-            // Build the final lambda
-            var lambda = Expression.Lambda<Action<T, Operation>>(assignment, input, operation);
-            return lambda;
+        // not completed
+        private Expression CreateOperandsForAdd(Expression input, Expression operation)
+        {
+            // Build the complete access path from the Path syntax
+            var (target, pathFlags) = BuildFromPath(input, Path);
+            if (pathFlags.HasFlag(PathFlags.IsArray))
+            {
+                throw new InvalidOperationException($"The operation type 'Add' is not supported on arrays. Consider changing the property to a collection");
+            }
+
+            // if the the target is an object, we treat it as a replace
+            // TODO: is the Value syntax the same of replace or should we support the more "complex" object syntax?
+            if (pathFlags.HasFlag(PathFlags.IsObject))
+            {
+                if (!pathFlags.HasFlag(PathFlags.CanWrite))
+                {
+                    throw new InvalidOperationException($"The property pointed from {Path} cannot be written");
+                }
+
+                // The Expression representing "operation.Value" (it is a System.Text.Json.JsonElement)
+                var valueProp = Expression.Property(operation, "Value");
+
+                // Build the Expression using the most appropriate GetXXX method on JsonElement
+                // The method is choosen from the type of the property pointed from the Path
+                var getValue = GetGetValueExpression(valueProp, target.Type);
+
+                // Assign the Value retrieved from the JsonElement to the property
+                var assignment = Expression.Assign(target, getValue);
+            }
+
+            // if the the target is a collection, we have to invoke the 'InsertAt' (if there is an index) or Add (if there is '-')
+            if (pathFlags.HasFlag(PathFlags.IsCollection))
+            {
+                //TODO
+            }
+
+            throw new NotSupportedException($"The operation is not supported on flags {pathFlags}");
+        }
+
+        // feature complete
+        private Expression CreateOperandsForRemove(Expression input, Expression operation)
+        {
+            // Build the complete access path from the Path syntax
+            var (target, pathFlags) = BuildFromPath(input, Path);
+            if (pathFlags.HasFlag(PathFlags.IsArray))
+            {
+                throw new InvalidOperationException($"The operation type 'Remove' is not supported on arrays. Consider changing the property to a collection");
+            }
+
+            // remove on object is done by assigning the default value
+            if (pathFlags.HasFlag(PathFlags.IsObject))
+            {
+                if (!pathFlags.HasFlag(PathFlags.CanWrite))
+                {
+                    throw new InvalidOperationException($"The property pointed from {Path} cannot be written");
+                }
+
+                var assignment = Expression.Assign(target, Expression.Default(target.Type));
+                return assignment;
+            }
+
+            // if the the target is a collection, we have to invoke the 'Remove' method passing the item to remove
+            if (pathFlags.HasFlag(PathFlags.IsCollection))
+            {
+                var arrayIndex = target as IndexExpression;
+                var collection = arrayIndex?.Object;
+                var removeMethod = collection?.Type.GetMethod("Remove");
+                if (collection == null || removeMethod == null)
+                    throw new InvalidOperationException($"The collection does not support removing the item {Path}");
+                return Expression.Call(collection, removeMethod, target);
+            }
+
+            throw new NotSupportedException($"The operation is not supported on flags {pathFlags}");
+        }
+
+        private Expression CreateOperandsForCopy(Expression input, Expression operation)
+        {
+            throw new NotSupportedException();
+        }
+
+        private Expression CreateOperandsForMove(Expression input, Expression operation)
+        {
+            throw new NotSupportedException();
+        }
+
+        private Expression CreateOperandsForTest(Expression input, Expression operation)
+        {
+            throw new NotSupportedException();
         }
 
         /// <summary>
@@ -137,7 +229,7 @@ namespace PatchHanlde.JsonPatch
                                         Expression.Constant(type)),
                         type);
             }
-            
+
             throw new NotSupportedException($"The type {type.Name} is not supported");
 
             static Expression BuildCall(Expression instance, Type type, string methodName)
@@ -153,11 +245,12 @@ namespace PatchHanlde.JsonPatch
         /// Path can be complex (multiple '/' specifying numeric indexes as well)
         /// </summary>
         /// <param name="root">The root Expression to start from</param>
+        /// <param name="path">The path to process. It can be either Path or From</param>
         /// <returns>The accessor as an Expression</returns>
         /// <exception cref="InvalidOperationException"></exception>
-        private (Expression expression, PathFlags flags) BuildFromPath(Expression root)
+        private (Expression expression, PathFlags flags) BuildFromPath(Expression root, string path)
         {
-            var segments = this.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
             Expression temp = root;
             PropertyInfo? lastProperty = null;
             PathFlags flags = PathFlags.None;
@@ -167,7 +260,7 @@ namespace PatchHanlde.JsonPatch
                 {
                     if (!int.TryParse(segment, out int index))
                     {
-                        throw new InvalidOperationException($"The segment {segment} in the path {Path} is not valid");
+                        throw new InvalidOperationException($"The segment {segment} in the path {path} is not valid");
                     }
 
                     if (temp.Type.IsArray)
@@ -188,7 +281,7 @@ namespace PatchHanlde.JsonPatch
                             throw new InvalidOperationException($"Cannot find a valid indexer in property {lastProperty?.Name}");
                         }
 
-                        if(itemProperty.CanWrite) 
+                        if (itemProperty.CanWrite)
                             flags |= PathFlags.CanWrite;
                         else
                             flags &= ~PathFlags.CanWrite;
@@ -207,10 +300,10 @@ namespace PatchHanlde.JsonPatch
                         .FirstOrDefault(p => string.Compare(p.Name, segment, StringComparison.InvariantCultureIgnoreCase) == 0);
                     if (lastProperty == null)
                     {
-                        throw new InvalidOperationException($"The path {Path} does not exist in the Type {root.Type.Name}");
+                        throw new InvalidOperationException($"The path {path} does not exist in the Type {root.Type.Name}");
                     }
 
-                    if(lastProperty.CanWrite) 
+                    if (lastProperty.CanWrite)
                         flags |= PathFlags.CanWrite;
                     else
                         flags &= ~PathFlags.CanWrite;
@@ -221,7 +314,7 @@ namespace PatchHanlde.JsonPatch
                 }
 
             }
-            
+
             return (temp, flags);
         }
 
