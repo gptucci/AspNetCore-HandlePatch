@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace PatchHanlde.JsonPatch
 {
-    public record Operation(string Op, string Path, JsonElement Value = default, string? From = default)
+    public record Operation(string Op, string Path, JsonElement Value = default, string From = "")
     {
         //public string Op { get; set; }
         //public string Path { get; set; }
