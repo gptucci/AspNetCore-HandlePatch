@@ -4,20 +4,30 @@ using System.Text.Json;
 
 namespace PatchHanlde.JsonPatch
 {
-    public record Operation(string Op, string Path, JsonElement Value)
+    public record Operation(string Op, string Path, JsonElement? Value = default, string? From = default)
     {
         //public string Op { get; set; }
         //public string Path { get; set; }
         //public JsonElement Value { get; set; }
 
+        private OperationType _operationType;
         private static Dictionary<string, object?> _actions = new();
+        private Func<Operation, Type, object> _onCustomConversion;
+        private bool _alwaysUseCustomConversion;
+
+        public void SetCustomConversionHook(Func<Operation, Type, object> onCustomConversion,
+            bool useAlways = false)
+        {
+            _onCustomConversion = onCustomConversion;
+            _alwaysUseCustomConversion= useAlways;
+        }
 
         public void Patch<T>(T model)
         {
-            if (!Enum.TryParse(Op, true, out OperationType operationType))
+            if (!Enum.TryParse(Op, true, out _operationType))
                 return;
 
-            switch (operationType)
+            switch (_operationType)
             {
                 case OperationType.Replace:
                     var del = CreateDelegate<T>();
@@ -67,7 +77,11 @@ namespace PatchHanlde.JsonPatch
             ParameterExpression operation = Expression.Parameter(typeof(Operation));
 
             // Build the complete access path from the Path syntax
-            var accessProperty = BuildFromPath(input);
+            var (accessProperty, pathFlags) = BuildFromPath(input);
+            if (!pathFlags.HasFlag(PathFlags.CanWrite))
+            {
+                throw new InvalidOperationException($"The property pointed from {Path} cannot be written");
+            }
 
             // The Expression representing "operation.Value"
             var valueProp = Expression.Property(operation, "Value");
@@ -94,24 +108,36 @@ namespace PatchHanlde.JsonPatch
         /// <exception cref="Exception"></exception>
         private Expression GetGetValueExpression(Expression jsonElement, Type type)
         {
-            Type jet = typeof(JsonElement);
-            if (type == typeof(Guid)) return BuildCall(jsonElement, jet, "GetGuid");
-            if (type == typeof(string)) return BuildCall(jsonElement, jet, "GetString");
-            if (type == typeof(bool)) return BuildCall(jsonElement, jet, "GetBoolean");
-            if (type == typeof(byte)) return BuildCall(jsonElement, jet, "GetByte");
-            if (type == typeof(sbyte)) return BuildCall(jsonElement, jet, "GetSByte");
-            if (type == typeof(DateTime)) return BuildCall(jsonElement, jet, "GetDateTime");
-            if (type == typeof(DateTimeOffset)) return BuildCall(jsonElement, jet, "GetDateTimeOffset");
-            if (type == typeof(Decimal)) return BuildCall(jsonElement, jet, "GetDecimal");
-            if (type == typeof(Double)) return BuildCall(jsonElement, jet, "GetDouble");
-            if (type == typeof(Single)) return BuildCall(jsonElement, jet, "GetSingle");
-            if (type == typeof(Int16)) return BuildCall(jsonElement, jet, "GetInt16");
-            if (type == typeof(Int32)) return BuildCall(jsonElement, jet, "GetInt32");
-            if (type == typeof(Int64)) return BuildCall(jsonElement, jet, "GetInt64");
-            if (type == typeof(UInt16)) return BuildCall(jsonElement, jet, "GetUInt16");
-            if (type == typeof(UInt32)) return BuildCall(jsonElement, jet, "GetUInt32");
-            if (type == typeof(UInt64)) return BuildCall(jsonElement, jet, "GetUInt64");
+            if (!_alwaysUseCustomConversion)
+            {
+                Type jet = typeof(JsonElement);
+                if (type == typeof(Guid)) return BuildCall(jsonElement, jet, "GetGuid");
+                if (type == typeof(string)) return BuildCall(jsonElement, jet, "GetString");
+                if (type == typeof(bool)) return BuildCall(jsonElement, jet, "GetBoolean");
+                if (type == typeof(byte)) return BuildCall(jsonElement, jet, "GetByte");
+                if (type == typeof(sbyte)) return BuildCall(jsonElement, jet, "GetSByte");
+                if (type == typeof(DateTime)) return BuildCall(jsonElement, jet, "GetDateTime");
+                if (type == typeof(DateTimeOffset)) return BuildCall(jsonElement, jet, "GetDateTimeOffset");
+                if (type == typeof(Decimal)) return BuildCall(jsonElement, jet, "GetDecimal");
+                if (type == typeof(Double)) return BuildCall(jsonElement, jet, "GetDouble");
+                if (type == typeof(Single)) return BuildCall(jsonElement, jet, "GetSingle");
+                if (type == typeof(Int16)) return BuildCall(jsonElement, jet, "GetInt16");
+                if (type == typeof(Int32)) return BuildCall(jsonElement, jet, "GetInt32");
+                if (type == typeof(Int64)) return BuildCall(jsonElement, jet, "GetInt64");
+                if (type == typeof(UInt16)) return BuildCall(jsonElement, jet, "GetUInt16");
+                if (type == typeof(UInt32)) return BuildCall(jsonElement, jet, "GetUInt32");
+                if (type == typeof(UInt64)) return BuildCall(jsonElement, jet, "GetUInt64");
+            }
 
+            if (_onCustomConversion != null)
+            {
+                return Expression.Convert(
+                        Expression.Invoke(Expression.Constant(_onCustomConversion),
+                                        Expression.Constant(this),
+                                        Expression.Constant(type)),
+                        type);
+            }
+            
             throw new NotSupportedException($"The type {type.Name} is not supported");
 
             static Expression BuildCall(Expression instance, Type type, string methodName)
@@ -129,12 +155,12 @@ namespace PatchHanlde.JsonPatch
         /// <param name="root">The root Expression to start from</param>
         /// <returns>The accessor as an Expression</returns>
         /// <exception cref="InvalidOperationException"></exception>
-        private Expression BuildFromPath(Expression root)
+        private (Expression expression, PathFlags flags) BuildFromPath(Expression root)
         {
             var segments = this.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
             Expression temp = root;
             PropertyInfo? lastProperty = null;
-            bool lastCanWrite = false;
+            PathFlags flags = PathFlags.None;
             foreach (var segment in segments)
             {
                 if (char.IsNumber(segment[0]))
@@ -148,7 +174,10 @@ namespace PatchHanlde.JsonPatch
                     {
                         // It is an array
                         temp = Expression.ArrayAccess(temp, Expression.Constant(index));
-                        lastCanWrite = true;
+                        flags |= PathFlags.CanWrite;
+                        flags |= PathFlags.IsArray;
+                        flags &= ~PathFlags.IsCollection;
+                        flags &= ~PathFlags.IsObject;
                     }
                     else if (typeof(System.Collections.ICollection).IsAssignableFrom(temp.Type))
                     {
@@ -159,7 +188,13 @@ namespace PatchHanlde.JsonPatch
                             throw new InvalidOperationException($"Cannot find a valid indexer in property {lastProperty?.Name}");
                         }
 
-                        lastCanWrite = itemProperty.CanWrite;
+                        if(itemProperty.CanWrite) 
+                            flags |= PathFlags.CanWrite;
+                        else
+                            flags &= ~PathFlags.CanWrite;
+                        flags &= ~PathFlags.IsArray;
+                        flags |= PathFlags.IsCollection;
+                        flags &= ~PathFlags.IsObject;
                         temp = Expression.Property(temp, itemProperty, Expression.Constant(index));
                     }
 
@@ -175,18 +210,19 @@ namespace PatchHanlde.JsonPatch
                         throw new InvalidOperationException($"The path {Path} does not exist in the Type {root.Type.Name}");
                     }
 
-                    lastCanWrite = lastProperty.CanWrite;
+                    if(lastProperty.CanWrite) 
+                        flags |= PathFlags.CanWrite;
+                    else
+                        flags &= ~PathFlags.CanWrite;
+                    flags &= ~PathFlags.IsArray;
+                    flags &= ~PathFlags.IsCollection;
+                    flags |= PathFlags.IsObject;
                     temp = Expression.MakeMemberAccess(temp, lastProperty);
                 }
 
             }
-
-            if (!lastCanWrite)
-            {
-                throw new InvalidOperationException($"The property pointed from {Path} cannot be written");
-            }
-
-            return temp;
+            
+            return (temp, flags);
         }
 
     }

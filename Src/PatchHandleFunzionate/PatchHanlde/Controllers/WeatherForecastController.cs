@@ -26,7 +26,7 @@ namespace PatchHanlde.Controllers
         {
             return Enumerable.Range(1, 5).Select(index => new WeatherForecast
             {
-                Date = DateTime.Now.AddDays(index),
+                Date = DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
                 TemperatureC = Random.Shared.Next(-20, 55),
                 Summary = Summaries[Random.Shared.Next(Summaries.Length)]
             })
@@ -43,7 +43,7 @@ namespace PatchHanlde.Controllers
             // simulate get from db with ID == id
             WeatherForecast weatherForecast = new WeatherForecast()
             {
-                Date = DateTime.Now,
+                Date = DateOnly.FromDateTime(DateTime.Now),
                 TemperatureC = 10,
                 Summary = "Summary",
                 Numbers = new int[] { 1, 2, },
@@ -51,7 +51,7 @@ namespace PatchHanlde.Controllers
 
             weatherForecast.Linked.Add(new WeatherForecast
             {
-                Date = DateTime.Now,
+                Date = DateOnly.FromDateTime(DateTime.Now),
                 TemperatureC = 11,
                 Summary = "Summary2",
                 Numbers = new int[] { 3, 4, },
@@ -59,20 +59,33 @@ namespace PatchHanlde.Controllers
 
             weatherForecast.Linked.Add(new WeatherForecast
             {
-                Date = DateTime.Now,
+                Date = DateOnly.FromDateTime(DateTime.Now),
                 TemperatureC = 12,
                 Summary = "Summary3",
                 Numbers = new int[] { 5, 6, },
             });
 
+            
+
             foreach (var operation in operations)
             {
+                operation.SetCustomConversionHook(OnCustomConversion, false);
                 operation.Patch(weatherForecast);
             }
 
             //patchDoc.ApplyTo(weatherForecast);
 
             return NoContent();
+        }
+
+        private object OnCustomConversion(Operation operation, Type type)
+        {
+            if(type == typeof(DateOnly))
+            {
+                return DateOnly.FromDateTime(operation.Value.GetDateTime());
+            }
+
+            throw new Exception($"Custom conversion not supported from type {type.Name}");
         }
     }
 

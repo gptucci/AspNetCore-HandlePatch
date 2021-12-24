@@ -37,3 +37,16 @@ Content-type: application/json-patch+json
         "value": 18
     }
 ]
+
+
+### Array
+PATCH https://localhost:7201/WeatherForecast/1
+Content-type: application/json-patch+json
+
+[
+    {
+        "op": "replace",
+        "path": "/Date",
+        "value": "2018-12-10T13:49:51.141Z"
+    }
+]
